@@ -15,8 +15,11 @@
 FILE *cwnd_log;
 struct timeval start_time;
 
+// Window management variables
 int next_seqno = 0;
 int send_base = 0;
+
+// Socket and server address variables
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
 FILE *fp;
@@ -96,54 +99,70 @@ int main(int argc, char **argv) {
     fprintf(cwnd_log, "time,CWND\n");
     gettimeofday(&start_time, NULL);
 
+
+    /*
+    Main Program Flow:
+    The sender operates in a continuous loop that:
+    - Sends packets while window is not full and data remains to be sent
+    - Reads data from the input file
+    - Creates and buffers packets
+    - Assigns sequence numbers
+    - Records sending time for RTT calculation
+    */
     while (1) {
         // Send packets while window is not full and data remains to be sent
         while (((next_seqno - send_base + SEQ_NUM_SPACE) % SEQ_NUM_SPACE) < floor(CWND) && !done_reading) {
-            int len = fread(buffer, 1, DATA_SIZE, fp);
+            int len = fread(buffer, 1, DATA_SIZE, fp);  // Read data from the input file
             if (len <= 0) {
                 done_reading = 1;
                 break;
             }
 
-            tcp_packet *pkt = make_packet(len);
-            memcpy(pkt->data, buffer, len);
-            pkt->hdr.seqno = next_seqno;
-            pkt->hdr.data_size = len;
+            tcp_packet *pkt = make_packet(len);  // Create a new packet with the read data
+            memcpy(pkt->data, buffer, len);  // Copy the data into the packet
+            pkt->hdr.seqno = next_seqno;  // Assign the sequence number
+            pkt->hdr.data_size = len;  // Set the data size
 
             int idx = next_seqno % SEQ_NUM_SPACE;
 
             // Store the packet in the window buffer
-            window[idx].pkt = pkt;
-            window[idx].acked = 0;
-            window[idx].retransmissions = 0;
+            window[idx].pkt = pkt;  // Store the packet in the window buffer
+            window[idx].acked = 0;  // Packet not acknowledged yet
+            window[idx].retransmissions = 0;  // No retransmissions yet
             window[idx].measured_RTT = 1;  // RTT measurement is valid initially
-            gettimeofday(&window[idx].sent_time, NULL);
+            gettimeofday(&window[idx].sent_time, NULL);  // Record the sending time
 
-            send_data_packet(pkt, len);
+            send_data_packet(pkt, len); // Send the packet
 
-            fprintf(stderr, "Sent packet with seqno %d, data_size %d\n",
+            fprintf(stderr, "Sent packet with seqno %d, data_size %d\n", // Print the sequence number and data size of the sent packet
                     pkt->hdr.seqno, pkt->hdr.data_size);
 
             next_seqno = (next_seqno + 1) % SEQ_NUM_SPACE;
         }
 
-        // Calculate the timeout for select()
-        struct timeval timeout;
-        struct timeval *timeout_ptr = NULL;
+        /*
+        Calculates dynamic timeout values based on RTT 
+        Tracks unacknowledged packets
+        Uses select() for efficient timeout handling
+        */
+        struct timeval timeout; // Timeout structure
+        struct timeval *timeout_ptr = NULL; // Pointer to timeout structure
         long min_timeout = RTO;  // Start with RTO as the maximum possible timeout
 
-        int has_unacked_packets = 0;
-        for (int i = send_base; i != next_seqno; i = (i + 1) % SEQ_NUM_SPACE) {
-            int idx = i % SEQ_NUM_SPACE;
-            if (window[idx].pkt != NULL && !window[idx].acked) {
-                has_unacked_packets = 1;
-                struct timeval now;
-                gettimeofday(&now, NULL);
-                long elapsed = (now.tv_sec - window[idx].sent_time.tv_sec) * 1000 +
+        int has_unacked_packets = 0; // Flag to check if there are unacknowledged packets
+        // Iterate through the window
+        for (int i = send_base; i != next_seqno; i = (i + 1) % SEQ_NUM_SPACE) { 
+            int idx = i % SEQ_NUM_SPACE; // Calculate the index of the packet in the window
+            if (window[idx].pkt != NULL && !window[idx].acked) { // Check if the packet exists and is not acknowledged
+                has_unacked_packets = 1; // Set the flag to indicate there are unacknowledged packets
+                struct timeval now; // Current time
+                gettimeofday(&now, NULL); // Get the current time
+
+                long elapsed = (now.tv_sec - window[idx].sent_time.tv_sec) * 1000 + // Calculate the elapsed time
                                (now.tv_usec - window[idx].sent_time.tv_usec) / 1000;
-                long time_remaining = RTO - elapsed;
+                long time_remaining = RTO - elapsed; // Calculate the time remaining until the timeout
                 if (time_remaining < min_timeout) {
-                    min_timeout = time_remaining;
+                    min_timeout = time_remaining; // Update the minimum timeout if the current time remaining is less
                 }
             }
         }
@@ -151,110 +170,127 @@ int main(int argc, char **argv) {
         // If there are no unacknowledged packets, wait indefinitely
         if (!has_unacked_packets && !done_reading) {
             timeout_ptr = NULL; // Wait indefinitely
-        } else {
+        } else { // If there are unacknowledged packets
             // Ensure the timeout is not negative
             if (min_timeout < 0) {
                 min_timeout = 0;
             }
-            timeout.tv_sec = min_timeout / 1000;
-            timeout.tv_usec = (min_timeout % 1000) * 1000;
-            timeout_ptr = &timeout;
+            timeout.tv_sec = min_timeout / 1000; // Convert milliseconds to seconds
+            timeout.tv_usec = (min_timeout % 1000) * 1000; // Convert remaining milliseconds to microseconds
+            timeout_ptr = &timeout; // Set the timeout pointer to the timeout structure
         }
 
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(sockfd, &readfds);
+        fd_set readfds; // File descriptor set for select()
+        FD_ZERO(&readfds); // Clear the file descriptor set
+        FD_SET(sockfd, &readfds); // Add the socket to the file descriptor set
 
-        int n = select(sockfd + 1, &readfds, NULL, NULL, timeout_ptr);
+        int n = select(sockfd + 1, &readfds, NULL, NULL, timeout_ptr); // Wait for events on the socket
 
-        if (n < 0) {
+        if (n < 0) { // If select() returns an error
             if (errno == EINTR) {
                 continue;
             } else {
                 perror("select");
             }
-        } else if (n == 0) {
-            // Timeout occurred
+        } else if (n == 0) { // If select() returns 0, a timeout occurred
+            // Check for timeouts
             check_timeouts();
-        } else {
+        } else { // If select() returns a positive number, an event occurred on the socket
             if (FD_ISSET(sockfd, &readfds)) {
                 // Receive ACKs
-                char ackbuf[1024];
-                struct sockaddr_in from;
-                socklen_t fromlen = sizeof(from);
+                /*
+                ACK Processing
+                */
+                char ackbuf[1024]; // Buffer to store the received ACK
+                struct sockaddr_in from; // Structure to store the sender's address
+                socklen_t fromlen = sizeof(from); // Length of the sender's address
+
+                // Receive the ACK from the sender
                 int ack_len = recvfrom(sockfd, ackbuf, sizeof(ackbuf), 0,
                                        (struct sockaddr *)&from, &fromlen);
-                if (ack_len < 0) {
+                if (ack_len < 0) { // If recvfrom() returns an error
                     if (errno == EINTR) {
                         continue;
                     } else {
                         perror("recvfrom");
                     }
-                } else {
+                } else { // If recvfrom() returns a positive number, the ACK was received successfully
                     // Process ACK
-                    if (ack_len < TCP_HDR_SIZE) {
+                    if (ack_len < TCP_HDR_SIZE) { // If the ACK is too small
                         fprintf(stderr, "Received ACK packet too small\n");
                         continue;
                     }
-                    tcp_packet *ack_pkt = (tcp_packet *)ackbuf;
+                    tcp_packet *ack_pkt = (tcp_packet *)ackbuf; // Cast the ACK buffer to a tcp_packet pointer
 
-                    convert_header_from_network_order(ack_pkt);
+                    convert_header_from_network_order(ack_pkt); // Convert the header from network byte order to host byte order    
 
-                    char ack_from_ip[INET_ADDRSTRLEN];
-                    inet_ntop(AF_INET, &(from.sin_addr), ack_from_ip, INET_ADDRSTRLEN);
-                    fprintf(stderr, "Received ACK from %s:%d\n", ack_from_ip, ntohs(from.sin_port));
+                    char ack_from_ip[INET_ADDRSTRLEN]; // Buffer to store the sender's IP address
+                    inet_ntop(AF_INET, &(from.sin_addr), ack_from_ip, INET_ADDRSTRLEN); // Convert the sender's IP address to a string
+                    fprintf(stderr, "Received ACK from %s:%d\n", ack_from_ip, ntohs(from.sin_port)); // Print the sender's IP address and port
 
-                    if (ack_pkt->hdr.ctr_flags == EOT_PACKET) {
-                        fprintf(stderr, "Received EOT ACK\n");
+                    if (ack_pkt->hdr.ctr_flags == EOT_PACKET) { // If the ACK is an EOT ACK
+                        fprintf(stderr, "Received EOT ACK\n"); 
                         eot_ack_received = 1;
-                        break;
-                    } else {
-                        int ackno = ack_pkt->hdr.ackno;
-                        fprintf(stderr, "Received ACK for seqno %d\n", ackno - 1);
+                        break; // Exit the loop
 
-                        if (ackno == last_ackno) {
+                    } else { // If the ACK is not an EOT ACK
+                        int ackno = ack_pkt->hdr.ackno; // Extract the sequence number from the ACK
+                        fprintf(stderr, "Received ACK for seqno %d\n", ackno - 1); // Print the sequence number
+
+                        if (ackno == last_ackno) { // If the ACK is a duplicate ACK
                             dup_ack_count++;
-                            if (dup_ack_count == 3) {
-                                // Fast retransmit
+                            if (dup_ack_count == 3) { // If the duplicate ACK count is 3  
+
+                                // Fast retransmit (Karn's Algorithm)
                                 fprintf(stderr, "Fast retransmit triggered for seqno %d\n", ackno);
-                                ssthresh = fmax(CWND / 2, 2);
-                                CWND = 1.0;
+
+                                // Update ssthresh and CWND
+                                ssthresh = fmax(CWND / 2, 2); // Update ssthresh
+                                CWND = 1.0; // Reset CWND
                                 fprintf(stderr, "Fast retransmit: ssthresh set to %.2f, CWND set to %.2f\n", ssthresh, CWND);
 
                                 // Log to CWND.csv
-                                double elapsed_time = get_time_since_start();
-                                fprintf(cwnd_log, "%.6f,%.2f\n", elapsed_time, CWND);
-                                fflush(cwnd_log);
+                                double elapsed_time = get_time_since_start(); // Get the elapsed time
+                                fprintf(cwnd_log, "%.6f,%.2f\n", elapsed_time, CWND); // Log the elapsed time and CWND
+                                fflush(cwnd_log); // Flush the log file
 
 
                                 // Exponential backoff of RTO
-                                RTO *= 2;
-                                if (RTO > 240000) {
-                                    RTO = 240000;
+                                RTO *= 2; // Double the RTO
+                                if (RTO > 240000) { // If the RTO is greater than 240000 ms
+                                    RTO = 240000; // Set the RTO to 240000 ms
                                 }
 
                                 // Retransmit the packet
-                                int idx = ackno % SEQ_NUM_SPACE;
-                                if (window[idx].pkt != NULL) {
-                                    send_data_packet(window[idx].pkt, window[idx].pkt->hdr.data_size);
-                                    gettimeofday(&window[idx].sent_time, NULL);
-                                    window[idx].measured_RTT = 0;
+                                int idx = ackno % SEQ_NUM_SPACE; // Calculate the index of the packet in the window
+                                if (window[idx].pkt != NULL) { // Check if the packet exists
+                                    send_data_packet(window[idx].pkt, window[idx].pkt->hdr.data_size); // Retransmit the packet
+                                    gettimeofday(&window[idx].sent_time, NULL); // Update the sending time
+                                    window[idx].measured_RTT = 0; // Reset the RTT measurement flag
                                     fprintf(stderr, "Retransmitted packet with seqno %d due to fast retransmit; RTO is now %.2f ms\n",
-                                            window[idx].pkt->hdr.seqno, RTO);
+                                            window[idx].pkt->hdr.seqno, RTO); // Print the sequence number and new RTO
                                 }
                                 dup_ack_count = 0; // Reset duplicate ACK count
                             }
-                        } else {
+                        } else { // If the ACK is not a duplicate ACK
                             // New ACK received
-                            dup_ack_count = 0;
-                            last_ackno = ackno;
+                            dup_ack_count = 0; // Reset duplicate ACK count
+                            last_ackno = ackno; // Update the last acknowledged sequence number
 
-                            if (((ackno - send_base + SEQ_NUM_SPACE) % SEQ_NUM_SPACE) <= SEQ_NUM_SPACE) {
-                                // Acknowledge all packets up to ackno - 1
-                                while (send_base != ackno) {
-                                    int idx = send_base % SEQ_NUM_SPACE;
-                                    if (window[idx].pkt != NULL) {
-                                        window[idx].acked = 1;
+                            /*
+                            Window Management
+                            - Slides window based on received ACKs
+                            - Frees acknowledged packets
+                            - Updates RTT estimations
+                            */
+                            // If the number of packets to acknowledge is less than or equal to the window size
+                            if (((ackno - send_base + SEQ_NUM_SPACE) % SEQ_NUM_SPACE) <= SEQ_NUM_SPACE) { 
+
+                                // Acknowledge all packets up to ackno - 1  
+                                while (send_base != ackno) { // While the send base is not the ackno
+                                    int idx = send_base % SEQ_NUM_SPACE; // Calculate the index of the packet in the window
+                                    if (window[idx].pkt != NULL) { // Check if the packet exists
+                                        window[idx].acked = 1; // Acknowledge the packet
 
                                         // Update RTT estimations if applicable
                                         update_rto_on_ack(&window[idx]);
@@ -360,45 +396,53 @@ void send_data_packet(tcp_packet *pkt, int data_size) {
     convert_header_from_network_order(pkt);
 }
 
-/* Function to check for timeouts and retransmit packets */
+/* Function to check for timeouts and retransmit packets:
+- Checks for packet timeouts
+- Implements exponential backoff of RTO
+- Retransmits timed-out packets
+- Updates congestion control parameters
+*/
 void check_timeouts() {
     struct timeval now;
     gettimeofday(&now, NULL);
 
+    // Iterate through the window
     for (int i = send_base; i != next_seqno; i = (i + 1) % SEQ_NUM_SPACE) {
-        int idx = i % SEQ_NUM_SPACE;
-        if (window[idx].pkt != NULL && !window[idx].acked) {
-            long elapsed = (now.tv_sec - window[idx].sent_time.tv_sec) * 1000 +
-                           (now.tv_usec - window[idx].sent_time.tv_usec) / 1000;
-            if (elapsed >= RTO) {
+
+        int idx = i % SEQ_NUM_SPACE; // Calculate the index of the packet in the window
+        if (window[idx].pkt != NULL && !window[idx].acked) { // Check if the packet exists and is not acknowledged
+
+            long elapsed = (now.tv_sec - window[idx].sent_time.tv_sec) * 1000 + // Calculate the elapsed time
+                           (now.tv_usec - window[idx].sent_time.tv_usec) / 1000; // Convert microseconds to milliseconds
+            if (elapsed >= RTO) { // If the elapsed time is greater than or equal to the RTO
                 // Timeout occurred
-                ssthresh = fmax(CWND / 2, 2);
-                CWND = 1.0;
+                ssthresh = fmax(CWND / 2, 2); // Update ssthresh
+                CWND = 1.0; // Reset CWND
                 fprintf(stderr, "Timeout occurred for seqno %d. ssthresh set to %.2f, CWND set to %.2f\n",
-                        window[idx].pkt->hdr.seqno, ssthresh, CWND);
+                        window[idx].pkt->hdr.seqno, ssthresh, CWND); // Print the sequence number, new ssthresh, and new CWND
 
                 // Log to CWND.csv
-                double elapsed_time = get_time_since_start();
-                fprintf(cwnd_log, "%.6f,%.2f\n", elapsed_time, CWND);
-                fflush(cwnd_log);
+                double elapsed_time = get_time_since_start(); // Get the elapsed time
+                fprintf(cwnd_log, "%.6f,%.2f\n", elapsed_time, CWND); // Log the elapsed time and CWND
+                fflush(cwnd_log); // Flush the log file
 
                 // Exponential backoff of RTO
-                RTO *= 2;
-                if (RTO > 240000) {
-                    RTO = 240000;
+                RTO *= 2; // Double the RTO
+                if (RTO > 240000) { // If the RTO is greater than 240000 ms
+                    RTO = 240000; // Set the RTO to 240000 ms
                 }
 
                 // Karn's Algorithm: Do not update RTT estimations for retransmitted packets
-                window[idx].measured_RTT = 0;
+                window[idx].measured_RTT = 0; // Reset the RTT measurement flag
 
                 // Retransmit the packet
                 send_data_packet(window[idx].pkt, window[idx].pkt->hdr.data_size);
 
                 // Update sent_time
-                gettimeofday(&window[idx].sent_time, NULL);
+                gettimeofday(&window[idx].sent_time, NULL); // Update the sending time
 
                 fprintf(stderr, "Retransmitted packet with seqno %d due to timeout; RTO is now %.2f ms\n",
-                        window[idx].pkt->hdr.seqno, RTO);
+                        window[idx].pkt->hdr.seqno, RTO); // Print the sequence number and new RTO
 
                 // Break after retransmitting due to timeout
                 break;
