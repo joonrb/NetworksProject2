@@ -118,7 +118,7 @@ int main(int argc, char **argv) {
             pkt->hdr.seqno = next_seqno;
             pkt->hdr.data_size = len;
 
-            int idx = next_seqno % SEQ_NUM_SPACE;
+            int idx = next_seqno % WINDOW_SIZE; // Use modulo to wrap around, yumi
 
             // Store the packet in the window buffer
             window[idx].pkt = pkt;
@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
         int has_unacked_packets = 0;
         uint32_t i = oldest_unack;
         while(i != next_seqno) {
-            int idx = i % SEQ_NUM_SPACE;
+            int idx = i % WINDOW_SIZE; // Use modulo to wrap around, yumi
             if(window[idx].pkt != NULL && !window[idx].acked) {
                 has_unacked_packets = 1;
                 struct timeval now;
@@ -248,7 +248,7 @@ int main(int argc, char **argv) {
                                 }
 
                                 // Retransmit the packet
-                                int idx = ackno % SEQ_NUM_SPACE;
+                                int idx = ackno % WINDOW_SIZE; // Use modulo to wrap around, yumi
                                 if(window[idx].pkt != NULL) {
                                     send_data_packet(window[idx].pkt, window[idx].pkt->hdr.data_size);
                                     gettimeofday(&window[idx].sent_time, NULL);
@@ -266,7 +266,7 @@ int main(int argc, char **argv) {
                             if(SEQ_LEQ(oldest_unack, ackno) && SEQ_LEQ(ackno, next_seqno)) {
                                 // Acknowledge all packets up to ackno
                                 while(SEQ_LT(oldest_unack, ackno)) {
-                                    int idx = oldest_unack % SEQ_NUM_SPACE;
+                                    int idx = oldest_unack % WINDOW_SIZE; // yumi
                                     if(window[idx].pkt != NULL) {
                                         window[idx].acked = 1;
 
@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
                                     fflush(cwnd_log);
                                 }else{
                                     // Congestion avoidance
-                                    CWND += 1.0 / CWND;
+                                    CWND += 0.5;
                                     fprintf(stderr, "Congestion avoidance: CWND increased to %.2f\n", CWND);
 
                                     // Log to CWND.csv
@@ -306,7 +306,7 @@ int main(int argc, char **argv) {
         }
 
         // Check for timeouts
-        check_timeouts();
+        //check_timeouts();
 
         // Check ifall data has been sent and acknowledged
         if(done_reading && oldest_unack == next_seqno && !eot_sent) {
@@ -378,7 +378,7 @@ void check_timeouts() {
 
     uint32_t i = oldest_unack;
     while(i != next_seqno) {
-        int idx = i % SEQ_NUM_SPACE;
+        int idx = i % WINDOW_SIZE; // Use modulo to wrap around, yumi
         if(window[idx].pkt != NULL && !window[idx].acked) {
             long elapsed = (now.tv_sec - window[idx].sent_time.tv_sec) * 1000 +
                            (now.tv_usec - window[idx].sent_time.tv_usec) / 1000;
@@ -395,10 +395,7 @@ void check_timeouts() {
                 fflush(cwnd_log);
 
                 // Exponential backoff of RTO
-                RTO *= 2;
-                if(RTO > RTO_MAX) {
-                    RTO = RTO_MAX;
-                }
+                RTO = fmin(RTO * 1.5, RTO_MAX);  // Use 1.5x instead of 2x for gentler backoff
 
                 // Karn's Algorithm: Do not update RTT estimations for retransmitted packets
                 window[idx].measured_RTT = 0;

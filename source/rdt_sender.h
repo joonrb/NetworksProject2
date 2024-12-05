@@ -11,9 +11,13 @@
 #define ALPHA 0.125        // 1/8
 #define BETA 0.25          // 1/4
 #define K 4                // Multiplier for RTTVAR in RTO calculation
-#define RTO_INITIAL 3000   // Initial RTO value in milliseconds (3 seconds)
-#define RTO_MIN 1000       // Minimum RTO (1 second)
-#define RTO_MAX 240000     // Maximum RTO (240 seconds)
+// #define RTO_INITIAL 3000   // Initial RTO value in milliseconds (3 seconds)
+// #define RTO_MIN 1000       // Minimum RTO (1 second)
+// #define RTO_MAX 240000     // Maximum RTO (240 seconds)
+
+#define RTO_INITIAL 100.0  // Start with 100ms
+#define RTO_MIN 50.0      // Minimum RTO of 50ms
+#define RTO_MAX 240000    // Maximum RTO of 1 second
 
 // Sequence number comparison macros
 #define SEQ_LT(a,b) ((int32_t)((a)-(b)) < 0)

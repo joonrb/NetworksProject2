@@ -21,3 +21,15 @@ mm-link --meter-uplink --meter-downlink \
 
 
 mm-delay 50 -- sh -c "./rdt_receiver 8888 input.txt & sleep 1; ./rdt_sender localhost 8888 output.txt"
+
+diff testfile.bin received_file.bin
+md5sum testfile.bin received_file.bin
+
+
+./rdt_receiver 8080 received_file.bin
+./rdt_sender 127.0.0.1 8080 testfile.bin
+
+
+dd if=/dev/zero of=testfile.bin bs=1024 count=1024
+
+mm-delay 5 mm-loss uplink 0.2 mm-loss downlink 0.5

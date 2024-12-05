@@ -16,6 +16,14 @@ FILE *fp;
 WindowEntry window[WINDOW_SIZE];
 uint32_t oldest_unack = 0;
 
+
+// Add this helper function at the top of rdt_receiver.c after the global variables
+int is_seqno_in_window(uint32_t seqno) {
+    uint32_t distance = (seqno - oldest_unack + SEQ_NUM_SPACE) % SEQ_NUM_SPACE;
+    return distance < WINDOW_SIZE;
+}
+
+
 int main(int argc, char **argv) {
     int portno;
     char buffer[MSS_SIZE];
@@ -45,8 +53,16 @@ int main(int argc, char **argv) {
     if(bind(sockfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) < 0)
         error("ERROR on binding");
 
+    int rcvbuf = 0;
+    socklen_t optlen = sizeof(rcvbuf);
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, optlen);
+
     clientlen = sizeof(clientaddr);
     memset(window, 0, sizeof(window));
+    for(int i = 0; i < WINDOW_SIZE; i++) {
+        window[i].pkt = NULL;
+        window[i].received = 0;
+    }
 
     fprintf(stderr, "Server is ready to receive packets on port %d\n", portno);
 
@@ -84,8 +100,8 @@ int main(int argc, char **argv) {
 
         fprintf(stderr, "Received packet with seqno %u\n", seqno);
 
-        if((seqno - oldest_unack + SEQ_NUM_SPACE) % SEQ_NUM_SPACE < WINDOW_SIZE) {
-            int idx = (seqno - oldest_unack + SEQ_NUM_SPACE) % SEQ_NUM_SPACE;
+        if(is_seqno_in_window(seqno)) {
+            int idx = (seqno - oldest_unack) % WINDOW_SIZE;  // Use WINDOW_SIZE instead of SEQ_NUM_SPACE
             if(idx < WINDOW_SIZE) {
                 if(!window[idx].received) {  // Check if the packet is new
                     window[idx].pkt = pkt;
