@@ -30,6 +30,10 @@ md5sum testfile.bin received_file.bin
 ./rdt_sender 127.0.0.1 8080 testfile.bin
 
 
+./rdt_sender $MAHIMAHI_BASE 8080 testfile.bin
+
+
+
 dd if=/dev/zero of=testfile.bin bs=1024 count=1024
 
 mm-delay 5 mm-loss uplink 0.2 mm-loss downlink 0.5

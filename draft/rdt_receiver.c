@@ -108,13 +108,28 @@ int main(int argc, char **argv) {
                     window[idx].received = 1;
                     fprintf(stderr, "Stored packet with seqno %u at index %d\n", seqno, idx);
                     
-                    // Attempt to slide the window
+                    // Find highest consecutive packet received
+                    uint32_t highest_consec = oldest_unack;
+                    while(window[(highest_consec - oldest_unack) % WINDOW_SIZE].received) {
+                        highest_consec = (highest_consec + 1) % SEQ_NUM_SPACE;
+                        if(highest_consec == oldest_unack) break;
+                    }
+                    // Send ACK immediately for the received packet
+                    send_ack_packet(highest_consec, 0, &clientaddr, clientlen);
+                    
                     slide_window();
                 } else {
                     fprintf(stderr, "Duplicate packet with seqno %u\n", seqno);
                     free(pkt);  // Free duplicate packet
-                    // Send ACK for the last successfully processed packet
-                    send_ack_packet(oldest_unack - 1, 0, &clientaddr, clientlen);
+                    // Resend ACK for highest consecutive packet
+                    uint32_t highest_consec = oldest_unack;
+                    while(window[(highest_consec - oldest_unack) % WINDOW_SIZE].received) {
+                        highest_consec = (highest_consec + 1) % SEQ_NUM_SPACE;
+                        if(highest_consec == oldest_unack) break;
+                    }
+                    send_ack_packet((highest_consec - 1 + SEQ_NUM_SPACE) % SEQ_NUM_SPACE, 0, &clientaddr, clientlen);
+                    // // Send ACK for the last successfully processed packet
+                    // send_ack_packet(oldest_unack - 1, 0, &clientaddr, clientlen);
                 }
             }else{
                 // Packet is ahead of the window
@@ -191,8 +206,4 @@ void slide_window() {
         oldest_unack = (oldest_unack + 1) % SEQ_NUM_SPACE;
     }
     
-    // Only send ACK if we actually slid the window
-    if(oldest_unack != initial_oldest) {
-        send_ack_packet(oldest_unack - 1, 0, &clientaddr, clientlen);
-    }
 }

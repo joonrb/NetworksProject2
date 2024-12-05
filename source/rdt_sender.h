@@ -17,7 +17,7 @@
 
 #define RTO_INITIAL 100.0  // Start with 100ms
 #define RTO_MIN 50.0      // Minimum RTO of 50ms
-#define RTO_MAX 240000    // Maximum RTO of 1 second
+#define RTO_MAX 1000.0    // Maximum RTO of 1 second
 
 // Sequence number comparison macros
 #define SEQ_LT(a,b) ((int32_t)((a)-(b)) < 0)
