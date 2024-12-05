@@ -1,8 +1,8 @@
 #ifndef RDT_RECEIVER_H_INCLUDED
 #define RDT_RECEIVER_H_INCLUDED
 
-#define WINDOW_SIZE 10
-#define SEQ_NUM_SPACE 256
+#define WINDOW_SIZE 65536
+#define SEQ_NUM_SPACE UINT32_MAX
 
 #include "packet.h"
 #include "common.h"
@@ -14,8 +14,7 @@ typedef struct {
 
 void convert_header_from_network_order(tcp_packet *pkt);
 void convert_header_to_network_order(tcp_packet *pkt);
-void send_ack_packet(int ackno, int ctr_flags, struct sockaddr_in *clientaddr, socklen_t clientlen);
+void send_ack_packet(uint32_t ackno, int ctr_flags, struct sockaddr_in *clientaddr, socklen_t clientlen);
 void slide_window();
-int is_seqno_in_window(int seqno);
 
 #endif

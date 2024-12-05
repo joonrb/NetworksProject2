@@ -1,8 +1,8 @@
 #ifndef RDT_SENDER_H_INCLUDED
 #define RDT_SENDER_H_INCLUDED
 
-#define WINDOW_SIZE 10
-#define SEQ_NUM_SPACE 256
+#define WINDOW_SIZE 65536
+#define SEQ_NUM_SPACE UINT32_MAX
 
 #include "packet.h"
 #include "common.h"
@@ -15,11 +15,14 @@
 #define RTO_MIN 1000       // Minimum RTO (1 second)
 #define RTO_MAX 240000     // Maximum RTO (240 seconds)
 
+// Sequence number comparison macros
+#define SEQ_LT(a,b) ((int32_t)((a)-(b)) < 0)
+#define SEQ_LEQ(a,b) ((int32_t)((a)-(b)) <= 0)
+
 typedef struct {
     tcp_packet *pkt;
     int acked;
     struct timeval sent_time;
-    int retransmissions;  // Number of retransmissions
     int measured_RTT;     // 1 if RTT measurement is valid, 0 otherwise (Karn's Algorithm)
 } WindowEntry;
 
