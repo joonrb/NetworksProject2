@@ -8,7 +8,8 @@
 
 #include "rdt_receiver.h"
 
-int sockfd;
+
+int sockfd;  
 struct sockaddr_in serveraddr, clientaddr;
 socklen_t clientlen;
 FILE *fp;
@@ -66,7 +67,7 @@ int main(int argc, char **argv) {
 
     fprintf(stderr, "Server is ready to receive packets on port %d\n", portno);
 
-    while(1) {
+    while(1) {  
         int n = recvfrom(sockfd, buffer, MSS_SIZE, 0, (struct sockaddr *) &clientaddr, &clientlen);
         if(n < 0) {
             perror("recvfrom");
