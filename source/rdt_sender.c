@@ -104,20 +104,28 @@ int main(int argc, char **argv) {
     fprintf(cwnd_log, "time,CWND\n");
     gettimeofday(&start_time, NULL);
 
+
+    // Main sender loop
     while(1) {
-        // Send packets whilewindow is not full and data remains to be sent
+        // Phase 1: Send packets whilewindow is not full and data remains to be sent
         while(((next_seqno - oldest_unack + SEQ_NUM_SPACE) % SEQ_NUM_SPACE) < floor(CWND) && !done_reading) {
+            // Calculate available window space and send new packets if possible
+            // This ensures we don't send more than the window size
+            
+            // read data from file
             int len = fread(buffer, 1, DATA_SIZE, fp);
             if(len <= 0) {
                 done_reading = 1;
                 break;
             }
 
+            // Create and initialize new packet
             tcp_packet *pkt = make_packet(len);
             memcpy(pkt->data, buffer, len);
             pkt->hdr.seqno = next_seqno;
             pkt->hdr.data_size = len;
 
+            // Store packet in sender's window for potential retransmission
             int idx = next_seqno % WINDOW_SIZE; // Use modulo to wrap around, yumi
 
             // Store the packet in the window buffer
@@ -126,6 +134,8 @@ int main(int argc, char **argv) {
             window[idx].measured_RTT = 1;  // RTT measurement is valid initially
             gettimeofday(&window[idx].sent_time, NULL);
 
+
+            // Send the packet and advance sequence number
             send_data_packet(pkt, len);
 
             fprintf(stderr, "Sent packet with seqno %u, data_size %d\n",
@@ -134,16 +144,19 @@ int main(int argc, char **argv) {
             next_seqno = (next_seqno + 1) % SEQ_NUM_SPACE;
         }
 
-        // Set up timeout for select
+        // Phase 2:Set up timeout for select
         struct timeval timeout;
         struct timeval *timeout_ptr = NULL;
         long min_timeout = RTO;  // Start with RTO as the maximum possible timeout
 
+        // Calculate minimum timeout based on unacknowledged packets
+        // This ensures we don't wait longer than necessary for ACKs
         // Check for unacknowledged packets and flag ifany exist
         int has_unacked_packets = 0;
         uint32_t i = oldest_unack;
         while(i != next_seqno) {
-            int idx = i % WINDOW_SIZE; // Use modulo to wrap around, yumi
+            int idx = i % WINDOW_SIZE; // Use modulo to wrap around
+            // Check if packet is in window and not acknowledged
             if(window[idx].pkt != NULL && !window[idx].acked) {
                 has_unacked_packets = 1;
                 struct timeval now;
@@ -164,7 +177,8 @@ int main(int argc, char **argv) {
         }
 
         // ifthere are no unacknowledged packets, wait indefinitely
-        if(!has_unacked_packets && !done_reading) {
+
+        if(!has_unacked_packets && !done_reading) { // If no unacked packets and data is still being read
             timeout_ptr = NULL;
         }else{
             // Ensure the timeout is not negative
@@ -176,6 +190,8 @@ int main(int argc, char **argv) {
             timeout_ptr = &timeout;
         }
 
+
+        // Phase 3: Wait for ACKs using select()
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(sockfd, &readfds);
@@ -183,13 +199,14 @@ int main(int argc, char **argv) {
         int n = select(sockfd + 1, &readfds, NULL, NULL, timeout_ptr);
 
         if(n < 0) {
+            // Handle select error
             if(errno == EINTR) {
                 continue;
             }else{
                 perror("select");
             }
         }else if(n == 0) {
-            // Timeout occurred
+            // Timeout occurred - handle retransmissions
             check_timeouts();
         }else{
             if(FD_ISSET(sockfd, &readfds)) {
@@ -281,7 +298,7 @@ int main(int argc, char **argv) {
                                 // Update CWND
                                 if(CWND < ssthresh) {
                                     // Slow start
-                                    CWND += 1.0;
+                                    CWND *= 2.0;
                                     fprintf(stderr, "Slow start: CWND increased to %.2f\n", CWND);
 
                                     // Log to CWND.csv
@@ -290,7 +307,7 @@ int main(int argc, char **argv) {
                                     fflush(cwnd_log);
                                 }else{
                                     // Congestion avoidance
-                                    CWND += 0.5;
+                                    CWND += 1.0/CWND;
                                     fprintf(stderr, "Congestion avoidance: CWND increased to %.2f\n", CWND);
 
                                     // Log to CWND.csv
